@@ -140,7 +140,7 @@ More ready-to-use examples can be found in the [Example](https://mosecorg.github
 
 <sup>*As accessed on 08 Oct 2021. By no means is this comparison showing that other frameworks are inferior, but rather it is used to illustrate the trade-off. The information is not guaranteed to be absolutely accurate. Please let us know if you find anything that may be incorrect.</sup>
 
-<sup>**(1)**: Data format of the service's request and response. "Limited" in a sense that the framework has pre-defined requirement on the format.</sup>
+<sup>**(1)**: Data format of the service's request and response. "Limited" in the sense that the framework has pre-defined requirements on the format.</sup>
 <sup>**(2)**: Supported machine learning frameworks. "Heavily" means the serving framework is designed towards a certain ML framework, thus it is hard, if not impossible, to adapt to others. "Multiple" means the serving framework provides adaptation to several existing ML frameworks. "Agnostic" means the serving framework does not necessarily care about the ML framework, hence it supports all ML frameworks (in Python).</sup>
 <sup>**(3)**: Flask is a representative of general purpose web frameworks to host ML models.</sup>
 
