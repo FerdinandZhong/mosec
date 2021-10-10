@@ -167,17 +167,17 @@ class Coordinator:
                 )
                 logger.info(f"{self.name} decoding error: {err_msg}")
                 status = self.protocol.FLAG_BAD_REQUEST
-                payloads = (f"Decoding Error: {err_msg}".encode(),)
+                payloads = (f"decoding error: {err_msg}".encode(),)
             except ValidationError as err:
                 err_msg = str(err)
                 err_msg = err_msg if len(err_msg) else "invalid data format"
                 logger.info(f"{self.name} validation error: {err_msg}")
                 status = self.protocol.FLAG_VALIDATION_ERROR
-                payloads = (f"Validation Error: {err_msg}".encode(),)
+                payloads = (f"validation error: {err_msg}".encode(),)
             except Exception:
                 logger.warning(traceback.format_exc().replace("\n", " "))
                 status = self.protocol.FLAG_INTERNAL_ERROR
-                payloads = ("Internal Error".encode(),)
+                payloads = ("Internal Error".encode(),)  # placeholder
 
             try:
                 self.protocol.send(status, ids, payloads)
