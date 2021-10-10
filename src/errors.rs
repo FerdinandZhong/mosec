@@ -5,16 +5,10 @@ pub(crate) enum ServiceError {
     #[display(fmt = "inference timeout")]
     Timeout,
 
-    #[display(fmt = "bad request: cannot decode request bytes")]
-    BadRequestError,
-
-    #[display(fmt = "inference internal error")]
-    InternalError,
-
-    #[display(fmt = "too many request: channel is full")]
+    #[display(fmt = "too many request: task queue is full")]
     TooManyRequests,
 
-    #[display(fmt = "cannot accept new request during the graceful shutdown")]
+    #[display(fmt = "gracefully shutting down")]
     GracefulShutdown,
 
     #[display(fmt = "mosec unknown error")]

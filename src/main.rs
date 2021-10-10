@@ -7,6 +7,7 @@ mod tasks;
 
 use std::net::SocketAddr;
 
+use bytes::Bytes;
 use clap::Clap;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body::to_bytes, header::HeaderValue, Body, Method, Request, Response, StatusCode};
@@ -22,108 +23,115 @@ use crate::metrics::Metrics;
 use crate::tasks::{TaskCode, TaskManager};
 
 const SERVER_INFO: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-const NOT_FOUND: &[u8] = b"Not Found";
+const RESPONSE_NOT_FOUND: &str = "not found";
+const RESPONSE_EMPTY: &str = "no data provided";
+const RESPONSE_INTERNAL_ERROR: &str = "inference internal error";
+const RESPONSE_UNKNOWN_ERROR: &str = "mosec unknown error";
+const RESPONSE_SHUTDOWN: &str = "gracefully shutting down";
 
-async fn index(_: Request<Body>) -> Result<Response<Body>, ServiceError> {
+async fn index(_: Request<Body>) -> Response<Body> {
     let task_manager = TaskManager::global();
     if task_manager.is_shutdown() {
-        return Err(ServiceError::GracefulShutdown);
+        return build_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Bytes::from(RESPONSE_SHUTDOWN),
+        );
     }
-    Ok(Response::new(Body::from("MOSEC service")))
+    build_response(StatusCode::OK, Bytes::from("MOSEC service"))
 }
 
-async fn metrics(_: Request<Body>) -> Result<Response<Body>, ServiceError> {
+async fn metrics(_: Request<Body>) -> Response<Body> {
     let encoder = TextEncoder::new();
     let metrics = prometheus::gather();
     let mut buffer = vec![];
     encoder.encode(&metrics, &mut buffer).unwrap();
-    Ok(Response::new(Body::from(buffer)))
+    build_response(StatusCode::OK, Bytes::from(buffer))
 }
 
-async fn inference(req: Request<Body>) -> Result<Response<Body>, ServiceError> {
+async fn inference(req: Request<Body>) -> Response<Body> {
     let task_manager = TaskManager::global();
     let data = to_bytes(req.into_body()).await.unwrap();
     let metrics = Metrics::global();
 
     if data.is_empty() {
-        return Ok(Response::new(Body::from("No data provided")));
+        return build_response(StatusCode::OK, Bytes::from(RESPONSE_EMPTY));
     }
 
     metrics.remaining_task.inc();
-    let task = task_manager.submit_task(data).await?;
-    metrics.remaining_task.dec();
-    let mut status_code = StatusCode::OK;
-    match task.code {
-        TaskCode::Normal => {
-            metrics
-                .duration
-                .with_label_values(&["total", "total"])
-                .observe(task.create_at.elapsed().as_secs_f64());
-            metrics
-                .throughput
-                .with_label_values(&[status_code.as_str()])
-                .inc();
-            Ok(Response::new(Body::from(task.data)))
+    let mut status = StatusCode::OK;
+    let mut content = Bytes::from(RESPONSE_UNKNOWN_ERROR);
+
+    match task_manager.submit_task(data).await {
+        Ok(task) => match task.code {
+            TaskCode::Normal => {
+                // Record latency only for successful tasks
+                metrics
+                    .duration
+                    .with_label_values(&["total", "total"])
+                    .observe(task.create_at.elapsed().as_secs_f64());
+                content = task.data;
+            }
+            TaskCode::BadRequestError => {
+                status = StatusCode::BAD_REQUEST;
+                content = task.data; // Customized error message
+            }
+            TaskCode::ValidationError => {
+                status = StatusCode::UNPROCESSABLE_ENTITY;
+                content = task.data; // Customized error message
+            }
+            TaskCode::InternalError => {
+                status = StatusCode::INTERNAL_SERVER_ERROR;
+                content = Bytes::from(RESPONSE_INTERNAL_ERROR);
+            }
+            TaskCode::UnknownError => {
+                status = StatusCode::NOT_IMPLEMENTED;
+            }
+        },
+        Err(err) => {
+            // Handle errors for which task cannot be retrieved
+            content = Bytes::from(err.to_string());
+            match err {
+                ServiceError::TooManyRequests => {
+                    status = StatusCode::TOO_MANY_REQUESTS;
+                }
+                ServiceError::Timeout => {
+                    status = StatusCode::REQUEST_TIMEOUT;
+                }
+                ServiceError::UnknownError => {
+                    status = StatusCode::NOT_IMPLEMENTED;
+                }
+                ServiceError::GracefulShutdown => {
+                    status = StatusCode::SERVICE_UNAVAILABLE;
+                }
+            }
         }
-        TaskCode::ValidationError => {
-            // Allow user's customized error message
-            status_code = StatusCode::UNPROCESSABLE_ENTITY;
-            metrics
-                .throughput
-                .with_label_values(&[status_code.as_str()])
-                .inc();
-            Ok(Response::builder()
-                .status(status_code)
-                .header("server", HeaderValue::from_static(SERVER_INFO))
-                .body(Body::from(task.data))
-                .unwrap())
-        }
-        TaskCode::BadRequestError => Err(ServiceError::BadRequestError),
-        TaskCode::InternalError => Err(ServiceError::InternalError),
-        TaskCode::UnknownError => Err(ServiceError::UnknownError),
     }
-}
-
-fn error_handler(err: ServiceError) -> Response<Body> {
-    let status = match err {
-        ServiceError::Timeout => StatusCode::REQUEST_TIMEOUT,
-        ServiceError::BadRequestError => StatusCode::BAD_REQUEST,
-        ServiceError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
-        ServiceError::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
-        ServiceError::GracefulShutdown => StatusCode::SERVICE_UNAVAILABLE,
-        ServiceError::UnknownError => StatusCode::NOT_IMPLEMENTED,
-    };
-    let metrics = Metrics::global();
-
+    metrics.remaining_task.dec();
     metrics
         .throughput
         .with_label_values(&[status.as_str()])
         .inc();
 
+    build_response(status, content)
+}
+
+fn build_response(status: StatusCode, content: Bytes) -> Response<Body> {
     Response::builder()
         .status(status)
         .header("server", HeaderValue::from_static(SERVER_INFO))
-        .body(Body::from(err.to_string()))
+        .body(Body::from(content))
         .unwrap()
 }
 
 async fn service_func(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-    let res = match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") => index(req).await,
-        (&Method::GET, "/metrics") => metrics(req).await,
-        (&Method::POST, "/inference") => inference(req).await,
-        _ => Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(NOT_FOUND.into())
-            .unwrap()),
-    };
-    match res {
-        Ok(mut resp) => {
-            resp.headers_mut()
-                .insert("server", HeaderValue::from_static(SERVER_INFO));
-            Ok(resp)
-        }
-        Err(err) => Ok(error_handler(err)),
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => Ok(index(req).await),
+        (&Method::GET, "/metrics") => Ok(metrics(req).await),
+        (&Method::POST, "/inference") => Ok(inference(req).await),
+        _ => Ok(build_response(
+            StatusCode::NOT_FOUND,
+            Bytes::from(RESPONSE_NOT_FOUND),
+        )),
     }
 }
 

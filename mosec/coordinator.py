@@ -162,11 +162,15 @@ class Coordinator:
                     )
             except DecodingError as err:
                 err_msg = str(err).replace("\n", " - ")
+                err_msg = (
+                    err_msg if len(err_msg) else "cannot deserialize request bytes"
+                )
                 logger.info(f"{self.name} decoding error: {err_msg}")
                 status = self.protocol.FLAG_BAD_REQUEST
-                payloads = ("Decoding Error".encode(),)
+                payloads = (f"Decoding Error: {err_msg}".encode(),)
             except ValidationError as err:
                 err_msg = str(err)
+                err_msg = err_msg if len(err_msg) else "invalid data format"
                 logger.info(f"{self.name} validation error: {err_msg}")
                 status = self.protocol.FLAG_VALIDATION_ERROR
                 payloads = (f"Validation Error: {err_msg}".encode(),)
